@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+/system/logs/*.log
+.pytest_cache/
+/backups/*.zip
+.DS_Store
+.vscode/
+.env
+.env.*

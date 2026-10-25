@@ -1,0 +1,28 @@
+window:
+  width: 960
+  height: 600
+  title: Dungeon
+  fps: 60
+logging:
+  detail: 1
+dungeon:
+  width: 100
+  height: 100
+  player:
+    name: Player
+  items:
+  - name: 回復薬
+  enemies:
+  - name: スライム
+  generation:
+    room_count: 12
+    room_min_size:
+    - 5
+    - 5
+    room_max_size:
+    - 12
+    - 12
+    wall_thickness: 2
+    corridor_width: 3
+    max_attempts: 5000
+    seed: null

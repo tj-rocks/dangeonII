@@ -1,0 +1,114 @@
+move_animation:
+  duration_ms: 90
+tile_width: 64
+tile_height: 32
+origin_y: 130
+font_size: 26
+small_font_size: 20
+grid_line_width: 1
+item_points:
+- - 0
+  - -18
+- - 8
+  - -9
+- - 0
+  - 0
+- - -8
+  - -9
+shadow_rect:
+- -13
+- -5
+- 26
+- 10
+body_rect:
+- -9
+- -23
+- 18
+- 23
+body_radius: 5
+head_offset:
+- 0
+- -29
+head_radius: 9
+label_offset_y: -15
+hud:
+  x: 20
+  y: 16
+  line_spacing: 24
+colors:
+  wall_ground: [28, 32, 40]
+  background:
+  - 24
+  - 28
+  - 36
+  floor_odd:
+  - 65
+  - 79
+  - 94
+  floor_even:
+  - 74
+  - 89
+  - 104
+  grid:
+  - 39
+  - 49
+  - 61
+  item:
+  - 255
+  - 206
+  - 80
+  player:
+  - 83
+  - 191
+  - 255
+  enemy:
+  - 242
+  - 104
+  - 115
+  shadow:
+  - 27
+  - 35
+  - 44
+  label:
+  - 245
+  - 248
+  - 255
+  hud:
+  - 220
+  - 230
+  - 240
+wall_occlusion:
+  enabled: true
+  alpha: 65
+  radius_pixels: 160
+  softness: 0.45
+wall_layers:
+- height_tiles: 1
+  colors:
+    right:
+    - 84
+    - 93
+    - 112
+    left:
+    - 65
+    - 73
+    - 91
+    top:
+    - 125
+    - 138
+    - 157
+- height_tiles: 1
+  colors:
+    right:
+    - 103
+    - 113
+    - 132
+    left:
+    - 83
+    - 93
+    - 111
+    top:
+    - 145
+    - 156
+    - 175
+wall_cap_width_tiles: 0.12
