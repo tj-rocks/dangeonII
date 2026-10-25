@@ -185,7 +185,11 @@ seedを固定すると区画・標高・階段・初期配置を再現できま�
 | `_diamond(cx, cy)` | 床タイルのひし形の4頂点を計算する | 頂点のリスト |
 | `wall_faces(terrain, x, y)` | 床の隣が壁または範囲外になっている境界を列挙する。床同士・壁内部には面を作らない | `(方向名, dx, dy)`のリスト |
 | `_wall_profiles(terrain, elevations, stairs)` | 各壁面の両端の床標高を求める。階段は方向と下端・上端から傾斜を計算し、地形が同じ間は結果を再利用する | 壁面座標・方向ごとの両端標高 |
-| `_draw_wall_face(cx, cy, direction, dx, dy, endpoint_heights=(0, 0), exposed_ends=(), support_depths=(0, 0))` | 境界の両端標高から薄い2段の壁面と細い天端を描く。階段沿いは上端・段の境目も斜めになる。南・東の手前面だけ円形透過を適用 | `None` |
+| `_wall_join_posts(profiles)` | 別の床マスの2壁面が同じ標高で直角に接する角を特定する。`_wall_ends`と共有の頂点照合で計算・キャッシュ | `(x, y, 標高, 奥行き, 透過対象, 左端判定)`のタプル列 |
+| `_draw_wall_join_post(cx, cy, elevation, fade, left_corner=False)` | 別マス間の角へ設定幅の細い柱を重ねる。各段・支持部は壁色、上端は天面色とし、壁と同じ透過を使う | `None` |
+| `_paint_wall_post(target, cx, cy, elevation, side)` | 柱本体の各段・支持部と、壁より高い丸い柱頭を共通描画する。壁の段境界を保ち、追加の高さは上段へ加える | `None` |
+| `_draw_post_cap(target, cx, cy, side)` | 円形の柱頭を斜めから見た楕円と厚みを描く。同じ床の角・別マス間の角で共用 | `None` |
+| `_draw_wall_face(cx, cy, direction, dx, dy, endpoint_heights=(0, 0), exposed_ends=(), support_depths=(0, 0), cap_ends=())` | 境界の両端標高から薄い2段の壁面と細い天端を描く。階段沿いは上端・段の境目も斜めになる。接続する角の天端は縦の輪郭に揃える。南・東の手前面だけ円形透過を適用 | `None` |
 | `_draw_actor(actor, cx, cy)` | プレイヤー・敵の仮の図形、影、識別文字を描く | `None` |
 | `_draw_floor(cx, cy, raised, parity, elevation=0, cliff_edges=())` | 地上・段床の上面を色分けして描く | `None` |
 | `_draw_stair_block(x, y, block, dungeon)` | 1マス高の専用階段を複数の踏み段と側面で描く。段数はYAMLで指定 | `None` |
@@ -339,8 +343,12 @@ seedを固定すると区画・標高・階段・初期配置を再現できま�
 
 階段周囲の余白は`dungeon.generation.stair_clearance`（現在2マス）です。`_plan_entrance`は既存の予約範囲をこの値だけ広げ、入口から通常通路までの長さにも反映します。別の部屋・進入部・通路が階段や踊り場の近くへ寄ることを防ぎます。新しい描画・後補正処理は追加していません。
 
-角の縦柱は`values/renderer.yml`の`wall_corner_post`で切り替え・調整します。現在は`enabled: false`で柱を非表示にしています。有効にする場合は幅3px、`color_side: left`（縦方向の壁色）です。壁の各段と下側の支持面に同じ段の色を使い、壁面の共有頂点に沿って地面まで描きます。角の描画は接する壁面の後に行い、円形透過も共有します。
+角の縦柱は`values/renderer.yml`の`wall_corner_post`で切り替え・調整します。現在は`enabled: true`、柱幅13px、柱頭は`cap_width_pixels: 17`×`cap_depth_pixels: 8`の楕円、厚みは`cap_height_pixels: 3`です。`height_offset_pixels: 8`で壁より高くし、丸柱として描きます。画面上で左端になる柱は右隣の壁面と同じ`right`色に揃え、それ以外は`color_side: left`（縦方向の壁色）を使います。壁の各段と下側の支持面に同じ段の色を使い、壁面の共有頂点に沿って地面まで描きます。同じ床マスの角は`_draw_wall_corner`、別マスの壁が直角に接する角は`_wall_join_posts`で特定して`_draw_wall_join_post`で描きます。直線の継ぎ目・標高が一致しない接点・4面の交差には柱を追加しません。柱は接する壁面の後に奥行き順で描画し、円形透過も共有します。
 
 角の天面は面取りでつなぎます。2方向の厚みを加算した外側頂点は作らず、各壁の外縁同士を三角形で結び、左右の角が尖って張り出すのを防ぎます。壁面・切り口・下側の支持面には変更しません。
 
 壁の天面・角・切り口の厚み方向を内向きに統一しました。従来は天面だけ縦面から外へ伸びていたため、角の面取りだけでは左右の出っ張りが残っていました。現在は縦面を外側の基準線とし、天面をその内側へ描きます。部屋全体の左端・右端で、天面が縦面の輪郭から張り出さないことを画像の画素で検証します。
+
+`_wall_cap_ends(profiles)`は、同じ標高の共有頂点から全ての壁辺が画面の同じ横方向へ伸びる角を返します。`_wall_ends`で開放端と一緒に計算・キャッシュし、`draw`から`_draw_wall_face`の`cap_ends`へ渡します。別々の床マスに属する壁が通路の開口部でつながる角も対象です。直線の継ぎ目は左右へ辺が続くので切りません。
+
+`_trim_wall_cap_end(points, boundary, keep_right)`は、接続する角や端面がカメラに向かない開放端で、天面を縦面の端点位置へ切り揃えます。斜めの天面も交点を補間し、縁だけが左右へ飛び出すのを防ぎます。開放端のうち端面が見える側は、既存の厚みを持つ切り口を維持します。

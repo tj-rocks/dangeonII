@@ -65,6 +65,7 @@ class Dungeon:
         ]
         self._player: Player | None = None
         # 1は0.5マス。整数のハーフブロック数で高さを管理する。
+        self._floor_kinds = [["floor" for _ in range(width)] for _ in range(height)]
         self._elevations = [[0 for _ in range(width)] for _ in range(height)]
         self._stair_blocks: list[list[StairBlock | None]] = [[None for _ in range(width)] for _ in range(height)]
 
@@ -79,6 +80,16 @@ class Dungeon:
     @property
     def terrain(self) -> list[list[Tile]]:
         return [row[:] for row in self._terrain]
+
+    @property
+    def floor_kinds(self) -> list[list[str]]:
+        return [row[:] for row in self._floor_kinds]
+
+    def set_floor_kind(self, x: int, y: int, kind: str) -> None:
+        self._check_bounds(x,y)
+        if self._terrain[y][x] != Tile.FLOOR or kind not in ("floor","corridor"):
+            raise ValueError("床にfloorまたはcorridorを指定してください")
+        self._floor_kinds[y][x] = kind
 
     @property
     def actors(self) -> list[list[Player | Enemy | None]]:
@@ -418,6 +429,12 @@ class DungeonGenerator:
                 for x in range(room.x, room.x + room.width):
                     dungeon.set_elevation(x, y, room.elevation * 2)
         self._connect_elevations(dungeon)
+        room_cells = {(x,y) for room in rooms for y in range(room.y,room.y+room.height)
+                      for x in range(room.x,room.x+room.width)}
+        for y,row in enumerate(dungeon.terrain):
+            for x,tile in enumerate(row):
+                if tile == Tile.FLOOR:
+                    dungeon.set_floor_kind(x,y,"floor" if (x,y) in room_cells else "corridor")
         return dungeon
 
     def _room_cliff_allowed(self, first: Room, second: Room) -> bool:

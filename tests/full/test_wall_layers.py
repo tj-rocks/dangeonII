@@ -262,6 +262,7 @@ def test_cliff_edges_mark_all_directions_but_not_walls_or_stair_entrances(render
     (3,('south','west'),((0,1),(-1,0))),
 ])
 def test_wall_corners_fill_top_gap_without_changing_terrain(renderer,vertex,names,offsets):
+    renderer.config['wall_corner_post']['enabled'] = False  # 柱の下にある天面接続そのものを確認。
     dungeon = Dungeon(7,7)
     for dx,dy in offsets:
         dungeon.set_tile(3+dx,3+dy,Tile.WALL)
@@ -295,9 +296,13 @@ def test_corner_post_stays_on_shared_vertex_and_uses_vertical_wall_colors(render
     cx,cy = renderer._diamond(300,300)[vertex]
     base = cy-2*renderer.tile_height
     post = renderer.config['wall_corner_post']
+    side = 'right' if vertex == 3 else post['color_side']
     for index,offset in ((0,16),(1,48)):
         assert renderer.screen.get_at((cx,base-offset))[:3] == tuple(
-            renderer.config['wall_layers'][index]['colors'][post['color_side']])
+            renderer.config['wall_layers'][index]['colors'][side])
+    for px in range(cx-post['width_pixels']//2,cx-post['width_pixels']//2+post['width_pixels']):
+        for py in range(base-renderer.wall_height-post['height_offset_pixels'],base-renderer.wall_height-post['height_offset_pixels']+2):
+            assert renderer.screen.get_at((px,py))[:3] == tuple(renderer.config['wall_layers'][-1]['colors']['top'])
     # 外側へずれた柱を増やさず、共有頂点の細い幅だけに描く。
     for x in range(250,350):
         if abs(x-cx) > post['width_pixels']:
@@ -313,6 +318,14 @@ def test_wall_ends_only_close_exposed_tips_not_straight_joins_or_corners(rendere
     changed = dict(profiles)
     changed[4,3,'north'] = (2,2)
     assert renderer._wall_ends(changed)[3,3,'north'] == (1,)
+
+
+def test_connected_straight_wall_caps_are_not_cut_at_tile_seams(renderer):
+    profiles = {(3,3,'north'):(1,1),(4,3,'north'):(1,1),(3,3,'west'):(1,1)}
+    caps = renderer._wall_cap_ends(profiles)
+    assert 1 not in caps[3,3,'north']
+    assert 0 not in caps[4,3,'north']
+    assert renderer._wall_cap_ends(profiles) is caps
 
 
 def test_exposed_wall_tip_has_same_thickness_and_two_layer_colors(renderer):
@@ -367,6 +380,7 @@ def test_left_and_right_corner_caps_do_not_form_outward_spikes(renderer,vertex,n
 
 
 def test_whole_room_wall_caps_stay_inside_vertical_wall_silhouette(renderer):
+    renderer.config['wall_corner_post']['enabled'] = False  # 柱を除いた天面そのものの輪郭。
     dungeon = Dungeon(15,15)
     for y in range(15):
         for x in range(15):
@@ -384,3 +398,121 @@ def test_whole_room_wall_caps_stay_inside_vertical_wall_silhouette(renderer):
         assert actual == bytes(rect.width*rect.height*3)
     assert renderer.screen.get_at((160,260))[:3] != (0,0,0)
     assert renderer.screen.get_at((480,260))[:3] != (0,0,0)
+
+
+@pytest.mark.parametrize('name,dx,dy,end,boundary,side',[
+    ('north',0,-1,0,160,'left'),('west',-1,0,1,160,'right'),
+])
+@pytest.mark.parametrize('heights',[(0,0),(2,3)])
+def test_open_back_wall_end_has_no_unsupported_cap_overhang(renderer,name,dx,dy,end,boundary,side,heights):
+    renderer.screen.fill((0,0,0))
+    renderer._draw_wall_face(160,300,name,dx,dy,heights,exposed_ends=(end,))
+    rect = pygame.Rect(0,0,boundary,600) if side == 'left' else pygame.Rect(boundary+1,0,640-boundary-1,600)
+    pixels = pygame.image.tobytes(renderer.screen.subsurface(rect),'RGB')
+    assert pixels == bytes(rect.width*rect.height*3)
+
+
+@pytest.mark.parametrize('side', ['left', 'right'])
+def test_room_with_wall_island_has_no_cap_overhang_at_corridor_corners(renderer, side):
+    renderer.config['wall_corner_post']['enabled'] = False
+    dungeon = Dungeon(16,16)
+    for y in range(16):
+        for x in range(16):
+            floor = 3 <= x < 13 and 3 <= y < 13 and not (5 <= x < 8 and 5 <= y < 8)
+            dungeon.set_tile(x,y,Tile.FLOOR if floor else Tile.WALL)
+            if floor:
+                dungeon.set_elevation(x,y,2)
+    dungeon.place(Player(),8,8)
+    renderer.config['wall_occlusion']['enabled'] = False
+    renderer.draw(dungeon,0,show_hud=False)
+    vertex = (4.5,7.5) if side == 'left' else (7.5,4.5)
+    x,y = renderer.map_to_screen(*vertex,dungeon,elevation=1)
+    y -= renderer.wall_height
+    top_color = tuple(renderer.config['wall_layers'][-1]['colors']['top'])
+    # 壁の島の左右の角。隣接する別々の床の壁が接する位置を、描画全体で確認する。
+    outside = range(x-6,x) if side == 'left' else range(x+1,x+7)
+    assert all(renderer.screen.get_at((px,py))[:3] != top_color
+               for px in outside for py in range(y-4,y+5))
+    assert renderer.screen.get_at((x,y))[:3] == top_color
+
+
+@pytest.mark.parametrize('side', ['left', 'right'])
+@pytest.mark.parametrize('sloped', [False, True])
+def test_joined_wall_tips_share_vertical_outline_even_on_slopes(renderer,side,sloped):
+    dungeon = Dungeon(9,9)
+    dungeon.set_tile(4,4,Tile.WALL)
+    if side == 'right':
+        faces = [(4,3,'south',0,1),(5,4,'west',-1,0)]
+        vertex = (4.5,3.5)
+        stairs = [(4,3,1,(1,0)),(5,4,2,(0,1))]
+    else:
+        faces = [(3,4,'east',1,0),(4,5,'north',0,-1)]
+        vertex = (3.5,4.5)
+        stairs = [(3,4,1,(0,1)),(4,5,2,(1,0))]
+    for x,y,*_ in faces:
+        dungeon.set_elevation(x,y,4)
+    if sloped:
+        for x,y,base,up in stairs:
+            dungeon.set_stair_block(x,y,base,up)
+    profiles = renderer._wall_profiles(dungeon.terrain,dungeon.elevations,dungeon.stair_blocks)
+    ends, caps = renderer._wall_ends(profiles), renderer._wall_cap_ends(profiles)
+    renderer.screen.fill((0,0,0))
+    for x,y,name,dx,dy in faces:
+        key = (x,y,name)
+        renderer._draw_wall_face(*renderer.map_to_screen(x,y,dungeon),name,dx,dy,
+                                 profiles[key],ends[key],profiles[key],caps[key])
+    boundary,_ = renderer.map_to_screen(*vertex,dungeon)
+    rect = (pygame.Rect(0,0,boundary,600) if side == 'left'
+            else pygame.Rect(boundary+1,0,639-boundary,600))
+    pixels = pygame.image.tobytes(renderer.screen.subsurface(rect),'RGB')
+    assert pixels == bytes(rect.width*rect.height*3)
+    # 端そのものまで削ってしまわず、2段の壁面が縦につながっている。
+    x,y = renderer.map_to_screen(*vertex,dungeon,elevation=2)
+    assert renderer.screen.get_at((x,y-16))[:3] != (0,0,0)
+    assert renderer.screen.get_at((x,y-48))[:3] != (0,0,0)
+
+
+def test_wall_island_posts_cover_all_four_shared_corners(renderer):
+    dungeon = Dungeon(16,16)
+    for y in range(16):
+        for x in range(16):
+            dungeon.set_elevation(x,y,2)
+    for y in range(5,8):
+        for x in range(5,9):
+            dungeon.set_tile(x,y,Tile.WALL)
+    dungeon.place(Player(),10,10)
+    renderer.config['wall_occlusion']['enabled'] = False
+    before = (dungeon.terrain,dungeon.elevations)
+    renderer.draw(dungeon,0,show_hud=False)
+    profiles = renderer._wall_profiles(dungeon.terrain,dungeon.elevations,dungeon.stair_blocks)
+    posts = renderer._wall_join_posts(profiles)
+    corners = {(4.5,4.5),(8.5,4.5),(8.5,7.5),(4.5,7.5)}
+    assert {(x,y) for x,y,*_ in posts} == corners
+    post = renderer.config['wall_corner_post']
+    for x,y in corners:
+        side = 'right' if (x,y) == (4.5,7.5) else post['color_side']
+        cx,cy = renderer.map_to_screen(x,y,dungeon,1)
+        for px in range(cx-post['width_pixels']//2,cx-post['width_pixels']//2+post['width_pixels']):
+            for py in range(cy-renderer.wall_height-post['height_offset_pixels'],cy-renderer.wall_height-post['height_offset_pixels']+2):
+                assert renderer.screen.get_at((px,py))[:3] == tuple(renderer.config['wall_layers'][-1]['colors']['top'])
+        for layer,offset in ((0,16),(1,48)):
+            assert renderer.screen.get_at((cx,cy-offset))[:3] == tuple(
+                renderer.config['wall_layers'][layer]['colors'][side])
+    assert (dungeon.terrain,dungeon.elevations) == before
+    assert renderer._wall_join_posts(profiles) is posts
+
+
+def test_corner_post_respects_transparency_and_enabled_setting(renderer):
+    renderer.camera = (0,0)
+    renderer._fade_mask.fill((255,255,255,65))
+    renderer.screen.fill((0,0,0))
+    renderer._draw_wall_join_post(200,200,2,False)
+    opaque = renderer.screen.get_at((200,184))[:3]
+    renderer.screen.fill((0,0,0))
+    renderer._draw_wall_join_post(200,200,2,True)
+    faded = renderer.screen.get_at((200,184))[:3]
+    assert all(0 < f < o for f,o in zip(faded,opaque))
+    renderer.config['wall_corner_post']['enabled'] = False
+    renderer.screen.fill((0,0,0))
+    renderer._draw_wall_join_post(200,200,2,False)
+    assert pygame.image.tobytes(renderer.screen,'RGB') == bytes(640*600*3)

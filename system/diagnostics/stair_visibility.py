@@ -37,6 +37,10 @@ class StairVisibilityInspector(DungeonRenderer):
         self._expected = {}
         self._current_color = (0, 0, 0)
 
+    def _draw_texture(self, target, kind, index, points):
+        # 可視率の識別色はテクスチャで上書きしない。
+        pass
+
     def _surface_color(self, kind, normal):
         return self._current_color if kind == 'stair_top' else (0, 0, 0)
 
