@@ -43,3 +43,37 @@ def test_next_move_starts_from_previous_destination():
 def test_invalid_animation_settings(duration):
     with pytest.raises(ValueError):
         MoveAnimation(duration)
+
+
+@pytest.mark.parametrize('direction', [(1,0),(0,1),(-1,0),(0,-1)])
+@pytest.mark.parametrize('height', [0,1,4])
+def test_same_height_floor_never_overwrites_player_during_move(monkeypatch, direction, height):
+    import pygame
+    from system.dungeon import Dungeon,Player
+    from system.renderer import DungeonRenderer
+    monkeypatch.setenv('SDL_VIDEODRIVER','dummy')
+    monkeypatch.setenv('SDL_AUDIODRIVER','dummy')
+    pygame.init()
+    try:
+        dungeon = Dungeon(12,12)
+        for y in range(12):
+            for x in range(12):
+                dungeon.set_elevation(x,y,height*2)
+        dungeon.place(Player(),5,5)
+        dx,dy = direction
+        assert dungeon.move_player(dx,dy).moved
+        renderer = DungeonRenderer(pygame.Surface((640,600)))
+        renderer.move_animation.start((5,5),(5+dx,5+dy),0,height,height)
+        expected = None
+        for now in range(0,renderer.move_animation.duration_ms+1):
+            renderer.draw(dungeon,now,show_hud=False)
+            rect,_,shape = renderer._player_visibility_snapshot(320,300)
+            pixels = tuple(renderer.screen.get_at((rect.x+x,rect.y+y))
+                           for y in range(rect.height) for x in range(rect.width)
+                           if shape.get_at((x,y)).a)
+            if expected is None:
+                expected = pixels
+            assert pixels == expected, (direction,height,now)
+            assert dungeon.player_position == (5+dx,5+dy)
+    finally:
+        pygame.quit()
