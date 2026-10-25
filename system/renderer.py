@@ -189,8 +189,8 @@ class DungeonRenderer:
         a, b = ((corners[i][0], corners[i][1]-round(z*self.tile_height))
                 for i, z in zip(edges[direction], endpoint_heights))
         cap = self.config["wall_cap_width_tiles"]
-        shift = ((dx - dy) * self.tile_width / 2 * cap,
-                 (dx + dy) * self.tile_height / 2 * cap)
+        shift = (-(dx - dy) * self.tile_width / 2 * cap,
+                 -(dx + dy) * self.tile_height / 2 * cap)
         top_a, top_b = (a[0], a[1] - self.wall_height), (b[0], b[1] - self.wall_height)
         cap_points = [top_a, top_b, (top_b[0] + shift[0], top_b[1] + shift[1]),
                       (top_a[0] + shift[0], top_a[1] + shift[1])]
@@ -213,7 +213,7 @@ class DungeonRenderer:
             raised = [(px, py - height) for px, py in base]
             pygame.draw.polygon(target, self._surface_color("wall", layer["colors"][side]), local([*base, raised[1], raised[0]]))
             offset += height
-        # 天端と同じ厚みの切り口を、壁の端点から外側へ閉じる。
+        # 天端と同じ内向きの厚みで、壁の切り口を閉じる。
         end_side = side
         visible_end = 1 if direction in ("north","south") else 0
         for end in exposed_ends:
@@ -251,12 +251,13 @@ class DungeonRenderer:
         """既存壁面の共有頂点に天端と細い縦柱を合わせる。"""
         vectors = {"north":(0,-1),"west":(-1,0),"south":(0,1),"east":(1,0)}
         cap = self.config["wall_cap_width_tiles"]
-        shifts = [((dx-dy)*self.tile_width/2*cap,(dx+dy)*self.tile_height/2*cap)
+        shifts = [(-(dx-dy)*self.tile_width/2*cap,-(dx+dy)*self.tile_height/2*cap)
                   for dx,dy in (vectors[first],vectors[second])]
         px,py = self._diamond(cx,cy)[vertex]
         py -= round(elevation*self.tile_height)
         a,b = shifts
-        base = [(px,py),(px+a[0],py+a[1]),(px+a[0]+b[0],py+a[1]+b[1]),(px+b[0],py+b[1])]
+        # 外側へ2方向分張り出す頂点を作らず、両壁の縁を面取りでつなぐ。
+        base = [(px,py),(px+a[0],py+a[1]),(px+b[0],py+b[1])]
         top = [(x,y-self.wall_height) for x,y in base]
         post = self.config["wall_corner_post"]
         ground_y = py+round(elevation*self.tile_height)

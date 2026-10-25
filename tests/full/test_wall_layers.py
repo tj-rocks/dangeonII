@@ -274,8 +274,8 @@ def test_wall_corners_fill_top_gap_without_changing_terrain(renderer,vertex,name
     renderer._draw_wall_corner(300,300,vertex,*names,2)
     cx,cy = renderer._diamond(300,300)[vertex]
     cap = renderer.config['wall_cap_width_tiles']
-    point = (round(cx+(dx-dy)*renderer.tile_width/4*cap),
-             round(cy-2*renderer.tile_height-renderer.wall_height+(dx+dy)*renderer.tile_height/4*cap))
+    point = (round(cx-(dx-dy)*renderer.tile_width/4*cap),
+             round(cy-2*renderer.tile_height-renderer.wall_height-(dx+dy)*renderer.tile_height/4*cap))
     assert renderer.screen.get_at(point)[:3] == tuple(renderer.config['wall_layers'][-1]['colors']['top'])
     assert dungeon.terrain == before
 
@@ -317,13 +317,12 @@ def test_wall_ends_only_close_exposed_tips_not_straight_joins_or_corners(rendere
 
 def test_exposed_wall_tip_has_same_thickness_and_two_layer_colors(renderer):
     renderer.screen.fill((0,0,0))
-    renderer._draw_wall_face(160,200,'north',0,-1)
-    assert renderer.screen.get_at((194,180))[:3] == (0,0,0)
-    renderer._draw_wall_face(160,200,'north',0,-1,exposed_ends=(1,))
-    assert renderer.screen.get_at((194,180))[:3] == tuple(renderer.config['wall_layers'][0]['colors']['right'])
-    assert renderer.screen.get_at((194,148))[:3] == tuple(renderer.config['wall_layers'][1]['colors']['right'])
-    # 壁の端から天面と同じ厚みだけを描き、離れた場所に柱を作らない。
-    assert renderer.screen.get_at((200,180))[:3] == (0,0,0)
+    renderer._draw_wall_face(160,200,'east',1,0)
+    assert renderer.screen.get_at((158,196))[:3] == (0,0,0)
+    renderer._draw_wall_face(160,200,'east',1,0,exposed_ends=(0,))
+    assert renderer.screen.get_at((158,196))[:3] == tuple(renderer.config['wall_layers'][0]['colors']['left'])
+    assert renderer.screen.get_at((158,164))[:3] == tuple(renderer.config['wall_layers'][1]['colors']['left'])
+    assert renderer.screen.get_at((150,196))[:3] == (0,0,0)
 
 
 def test_elevated_wall_and_cut_end_are_supported_to_ground(renderer):
@@ -333,7 +332,7 @@ def test_elevated_wall_and_cut_end_are_supported_to_ground(renderer):
     renderer._draw_wall_face(160,250,'north',0,-1,(2,2),exposed_ends=(1,),support_depths=(2,2))
     color = tuple(renderer.config['wall_layers'][0]['colors']['right'])
     assert renderer.screen.get_at((176,210))[:3] == color
-    assert renderer.screen.get_at((194,210))[:3] == color
+    assert renderer.screen.get_at((190,210))[:3] == color
     assert renderer.wall_height == renderer.tile_height*2
 
 
@@ -351,3 +350,37 @@ def test_rendered_wall_support_depth_matches_its_raised_base(renderer,monkeypatc
     renderer.draw(dungeon,0,show_hud=False)
     assert any(args[5] == (2,2) and args[7] == (2,2) for args in captured)
     assert all(args[5] == args[7] for args in captured)
+
+
+@pytest.mark.parametrize('vertex,names',[(1,('north','east')),(3,('south','west'))])
+def test_left_and_right_corner_caps_do_not_form_outward_spikes(renderer,vertex,names):
+    renderer.config['wall_corner_post']['enabled'] = False
+    renderer.screen.fill((0,0,0))
+    renderer._draw_wall_corner(300,300,vertex,*names,1)
+    cx,cy = renderer._diamond(300,300)[vertex]
+    reach = round(renderer.tile_width/2*renderer.config['wall_cap_width_tiles'])
+    top = cy-renderer.tile_height-renderer.wall_height
+    painted = [(x,y) for y in range(top-10,top+10) for x in range(cx-15,cx+16)
+               if renderer.screen.get_at((x,y))[:3] != (0,0,0)]
+    assert painted
+    assert all(abs(x-cx) <= reach for x,y in painted)
+
+
+def test_whole_room_wall_caps_stay_inside_vertical_wall_silhouette(renderer):
+    dungeon = Dungeon(15,15)
+    for y in range(15):
+        for x in range(15):
+            dungeon.set_tile(x,y,Tile.WALL)
+    for y in range(5,10):
+        for x in range(5,10):
+            dungeon.set_tile(x,y,Tile.FLOOR)
+            dungeon.set_elevation(x,y,6)
+    dungeon.place(Player(),7,7)
+    renderer.config['wall_occlusion']['enabled'] = False
+    renderer.draw(dungeon,0,show_hud=False)
+    # 左右の壁の縦線はx=160,480。天端だけ外へ飛び出してはいけない。
+    for rect in (pygame.Rect(0,0,160,600),pygame.Rect(481,0,159,600)):
+        actual = pygame.image.tobytes(renderer.screen.subsurface(rect),'RGB')
+        assert actual == bytes(rect.width*rect.height*3)
+    assert renderer.screen.get_at((160,260))[:3] != (0,0,0)
+    assert renderer.screen.get_at((480,260))[:3] != (0,0,0)
