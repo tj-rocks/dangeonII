@@ -36,11 +36,14 @@ hud:
   y: 16
   line_spacing: 24
 colors:
-  wall_ground: [28, 32, 40]
+  wall_ground:
+  - 0
+  - 0
+  - 0
   background:
-  - 24
-  - 28
-  - 36
+  - 0
+  - 0
+  - 0
   floor_odd:
   - 65
   - 79
@@ -77,6 +80,22 @@ colors:
   - 220
   - 230
   - 240
+  platform_even:
+  - 111
+  - 126
+  - 140
+  platform_odd:
+  - 100
+  - 116
+  - 132
+  platform_side_left:
+  - 53
+  - 68
+  - 86
+  platform_side_right:
+  - 68
+  - 83
+  - 102
 wall_occlusion:
   enabled: true
   alpha: 65
@@ -112,3 +131,31 @@ wall_layers:
     - 156
     - 175
 wall_cap_width_tiles: 0.12
+stairs:
+  treads_per_block: 2
+
+player_occlusion:
+  enabled: true
+  alpha: 180
+
+surface_debug:
+  enabled: false
+  legend: "SURFACES: Pink=Wall Orange=FloorSide Purple=StairSide Green=StairTop Gray=Floor"
+  colors:
+    wall: [255, 70, 150]
+    floor_side: [255, 150, 40]
+    stair_side: [150, 80, 240]
+    stair_top: [70, 225, 120]
+    floor: [130, 145, 155]
+
+elevation_style:
+  reference_height: 1
+  brightness_per_height: 12
+  maximum_brightness_gain: 36
+  edge_width: 3
+  edge_color: [0, 0, 0]  # 段差の縁取り色（RGB: 0〜255）
+
+wall_corner_post:
+  enabled: false
+  width_pixels: 3
+  color_side: left

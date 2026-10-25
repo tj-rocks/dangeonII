@@ -11,7 +11,7 @@ from system.configuration import load_settings
 from system.savedata import SaveData
 
 
-def main(log_detail: int | None = None) -> None:
+def main(log_detail: int | None = None, debug_surfaces: bool = False) -> None:
     settings = load_settings("setting.yml")
     configure_logging(settings["logging"]["detail"] if log_detail is None else log_detail)
     pygame.init()
@@ -31,6 +31,8 @@ def main(log_detail: int | None = None) -> None:
         operate = Operate(dungeon)
         pygame.key.set_repeat()  # OSのキーリピートではなく押下状態で連続移動する
         renderer = DungeonRenderer(screen, operate.settings)
+        if debug_surfaces:
+            renderer.config["surface_debug"]["enabled"] = True
         logger.info3("現在座標: %s", dungeon.player_position)
 
         running = True
@@ -46,9 +48,11 @@ def main(log_detail: int | None = None) -> None:
                 break
             if not renderer.move_animation.is_active(now_ms):
                 before = dungeon.player_position
+                before_height = dungeon.floor_height(*before)
                 result = operate.move_held()
                 if result is not None and result.moved:
-                    renderer.move_animation.start(before, dungeon.player_position, now_ms)
+                    renderer.move_animation.start(before, dungeon.player_position, now_ms,
+                                                  before_height, dungeon.floor_height(*dungeon.player_position))
             renderer.draw(dungeon, now_ms)
             pygame.display.flip()
             clock.tick(window["fps"])
@@ -61,5 +65,6 @@ if __name__ == "__main__":
     parser.add_argument("--log-detail", type=int, choices=(1, 2, 3), default=None,
                         help="ログの詳細度。通常1、メソッド2、座標・描画3")
     parser.add_argument("--debug", action="store_true", help="--log-detail 3と同じ")
+    parser.add_argument("--debug-surfaces", action="store_true", help="壁・床側面・階段を色分けして診断表示")
     args = parser.parse_args()
-    main(log_detail=3 if args.debug else args.log_detail)
+    main(log_detail=3 if args.debug else args.log_detail, debug_surfaces=args.debug_surfaces)

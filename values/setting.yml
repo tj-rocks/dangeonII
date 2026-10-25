@@ -15,14 +15,28 @@ dungeon:
   enemies:
   - name: スライム
   generation:
-    room_count: 12
-    room_min_size:
-    - 5
-    - 5
-    room_max_size:
-    - 12
-    - 12
+    section_count: 12
+    section_sizes:
+    - - 6
+      - 6
+    - - 8
+      - 8
+    - - 10
+      - 8
+    section_elevations:
+    - 1
+    - 2
+    - 3
+    - 4
+    adjacent_probability: 0.45
+    corridor_elevation: 1
     wall_thickness: 2
     corridor_width: 3
     max_attempts: 5000
+    stair_sides: [east, south]
+    cliff_sides: [east, south]
+    stair_landing_length: 1
+    stair_clearance: 2  # 階段・踊り場の周囲へ別の構造を寄せないマス数
+    stair_attempts: 64
+    layout_attempts: 32
     seed: null

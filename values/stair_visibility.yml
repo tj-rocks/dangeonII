@@ -1,0 +1,10 @@
+seeds: [0, 1, 42]
+minimum_visible_ratio: 0.35
+output_directory: artifacts/stair_visibility
+marker_radius: 10
+label_font_size: 22
+marker_colors:
+  hidden: [255, 65, 80]
+  partial: [255, 185, 50]
+  visible: [65, 230, 120]
+crop_size: [800, 600]
