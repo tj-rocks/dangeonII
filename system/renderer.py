@@ -1,11 +1,70 @@
 """マップ座標を画面座標に変換して描画する。ゲーム状態は変更しない。"""
 
 import pygame
+from collections import OrderedDict
+from pathlib import Path
 
 from system.dungeon import Dungeon, Player, Tile
 from system.logs.tracing import trace_class
 from system.configuration import load_settings
 from system.operate import OperateSettings
+
+
+class TexturePalette:
+    """画像配列の選択・面への投影・投影結果の再利用。"""
+
+    KINDS = ("wall_upper", "wall_lower", "floor", "corridor", "stairs")
+
+    def __init__(self, settings, root, cache_size):
+        if type(cache_size) is not int or cache_size < 1:
+            raise ValueError("texture_cache_sizeは正の整数にしてください")
+        self.cache_size = cache_size
+        self.images = {}
+        self.cache = OrderedDict()
+        for kind in self.KINDS:
+            paths = settings[kind]
+            if not isinstance(paths, list) or any(not isinstance(p, str) or not p.strip() for p in paths):
+                raise ValueError(f"textures.{kind}は画像パスの配列にしてください")
+            self.images[kind] = []
+            for path in paths:
+                filename = Path(root) / path
+                try:
+                    self.images[kind].append(pygame.image.load(str(filename)))
+                except (OSError, pygame.error) as error:
+                    raise ValueError(f"textures.{kind}: 画像を読み込めません: {filename}") from error
+
+    def draw(self, target, kind, index, points):
+        images = self.images[kind]
+        if not images:
+            return
+        points = tuple((round(x), round(y)) for x,y in points)
+        left,top = min(x for x,y in points),min(y for x,y in points)
+        shape = tuple((x-left,y-top) for x,y in points)
+        variant = index % len(images)
+        key = kind,variant,shape
+        if key not in self.cache:
+            source = images[variant]
+            width,height = max(x for x,y in shape)+1,max(y for x,y in shape)+1
+            projected = pygame.Surface((width,height),pygame.SRCALPHA)
+            ax,ay = shape[0]
+            ux,uy = shape[1][0]-ax,shape[1][1]-ay
+            vx,vy = shape[3][0]-ax,shape[3][1]-ay
+            determinant = ux*vy-uy*vx
+            if not determinant:
+                return
+            for y in range(height):
+                for x in range(width):
+                    u = ((x-ax)*vy-(y-ay)*vx)/determinant
+                    v = (ux*(y-ay)-uy*(x-ax))/determinant
+                    if 0 <= u <= 1 and 0 <= v <= 1:
+                        sx = min(source.get_width()-1,int(u*source.get_width()))
+                        sy = min(source.get_height()-1,int(v*source.get_height()))
+                        projected.set_at((x,y),source.get_at((sx,sy)))
+            self.cache[key] = projected
+            if len(self.cache) > self.cache_size:
+                self.cache.popitem(last=False)
+        self.cache.move_to_end(key)
+        target.blit(self.cache[key],(left,top))
 
 
 @trace_class(info_methods=("__init__", "start"))
@@ -52,6 +111,8 @@ class DungeonRenderer:
     def __init__(self, screen: pygame.Surface, operate_settings: OperateSettings | None = None):
         self.screen = screen
         self.config = load_settings("renderer.yml")
+        self.textures = TexturePalette(self.config["textures"],Path(__file__).resolve().parent.parent,
+                                       self.config["texture_cache_size"])
         animation = self.config["move_animation"]
         self.move_animation = MoveAnimation(animation["duration_ms"])
         self.colors = self.config["colors"]
@@ -66,10 +127,16 @@ class DungeonRenderer:
         self._wall_profile_cache = None
         self._wall_end_source = None
         self._wall_end_cache = None
+        self._wall_cap_end_cache = None
+        self._wall_join_post_cache = ()
         self._fade_mask = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
         self._fade_circle = self._make_fade_circle()
         self.wall_height = sum(round(layer["height_tiles"] * self.tile_height)
                                for layer in self.config["wall_layers"])
+
+    def _draw_texture(self, target, kind, index, points):
+        if not self.config["surface_debug"]["enabled"]:
+            self.textures.draw(target,kind,index,points)
 
     def _make_fade_circle(self):
         setting = self.config["wall_occlusion"]
@@ -164,7 +231,7 @@ class DungeonRenderer:
         return profiles
 
     def _wall_ends(self, profiles):
-        """同じ高さの別の壁面につながらない端だけ、切り口を描く対象にする。"""
+        """共有頂点から、開放端と天面を輪郭へ切り揃える端を求める。"""
         if profiles is self._wall_end_source:
             return self._wall_end_cache
         vertices = ((-1,-1),(1,-1),(1,1),(-1,1))
@@ -173,17 +240,110 @@ class DungeonRenderer:
         for (x,y,name),heights in profiles.items():
             for end,(vertex,z) in enumerate(zip(edges[name],heights)):
                 ox,oy = vertices[vertex]
-                joins.setdefault((2*x+ox,2*y+oy,z),[]).append(((x,y,name),end))
+                other_x,other_y = vertices[edges[name][1-end]]
+                screen_dx = (other_x-other_y)-(ox-oy)
+                joins.setdefault((2*x+ox,2*y+oy,z),[]).append(((x,y,name),end,screen_dx))
         ends = {key:[] for key in profiles}
-        for entries in joins.values():
+        cap_ends = {key:[] for key in profiles}
+        posts = []
+        normals = {"north":(0,-1),"west":(-1,0),"south":(0,1),"east":(1,0)}
+        for (vx,vy,z),entries in joins.items():
             if len(entries) == 1:
-                key,end = entries[0]
+                key,end,_ = entries[0]
                 ends[key].append(end)
+            elif len({dx > 0 for _,_,dx in entries}) == 1:
+                # 別マスの壁が回り込む角も、共有する縦の輪郭で天面を止める。
+                # 直線の継ぎ目は左右へ辺が続くため、切り欠かない。
+                for key,end,_ in entries:
+                    cap_ends[key].append(end)
+            if len(entries) == 2:
+                first,second = (entry[0] for entry in entries)
+                ax,ay = normals[first[2]]
+                bx,by = normals[second[2]]
+                if first[:2] != second[:2] and ax*bx+ay*by == 0:
+                    depth = max(x+y+sum(normals[name])/2 for x,y,name in (first,second))
+                    fade = first[2] in ("south","east") or second[2] in ("south","east")
+                    left_corner = all(screen_dx > 0 for _,_,screen_dx in entries)
+                    posts.append((vx/2,vy/2,z,depth,fade,left_corner))
         self._wall_end_source = profiles
         self._wall_end_cache = {key:tuple(value) for key,value in ends.items()}
+        self._wall_cap_end_cache = {key:tuple(value) for key,value in cap_ends.items()}
+        self._wall_join_post_cache = tuple(posts)
         return self._wall_end_cache
 
-    def _draw_wall_face(self, cx, cy, direction, dx, dy, endpoint_heights=(0, 0), exposed_ends=(), support_depths=(0, 0)):
+    def _wall_join_posts(self, profiles):
+        """別の床マスに属する壁が直角につながる位置を返す。"""
+        self._wall_ends(profiles)
+        return self._wall_join_post_cache
+
+    def _draw_wall_join_post(self, cx, cy, elevation, fade, left_corner=False):
+        """共有頂点へ細い柱を重ね、別マスの壁の継ぎ目を閉じる。"""
+        post = self.config["wall_corner_post"]
+        if not post["enabled"]:
+            return
+        top = cy-self.wall_height-post["height_offset_pixels"]
+        ground = cy+round(elevation*self.tile_height)
+        half_cap = max(post["width_pixels"],post["cap_width_pixels"])//2
+        half_depth = post["cap_depth_pixels"]//2
+        rect = pygame.Rect(cx-half_cap,top-half_depth,2*half_cap+1,ground-top+half_depth+1)
+        target = pygame.Surface(rect.size,pygame.SRCALPHA)
+        side = "right" if left_corner else post["color_side"]
+        self._paint_wall_post(target,cx-rect.x,cy-rect.y,elevation,side)
+        self._blit_wall_surface(target,rect,fade)
+
+    def _paint_wall_post(self, target, cx, cy, elevation, side):
+        """柱本体と、壁より高い丸い柱頭を同じ座標系で描く。"""
+        post = self.config["wall_corner_post"]
+        width = post["width_pixels"]
+        extra = post["height_offset_pixels"]
+        top = cy-self.wall_height-extra
+        ground = cy+round(elevation*self.tile_height)
+        body_x = cx-width//2
+        pygame.draw.rect(target,self._surface_color("wall",self.config["wall_layers"][0]["colors"][side]),
+                         (body_x,top,width,ground-top+1))
+        offset = 0
+        for index,layer in enumerate(self.config["wall_layers"]):
+            height = round(layer["height_tiles"]*self.tile_height)
+            if index == len(self.config["wall_layers"])-1:
+                height += extra
+            offset += height
+            pygame.draw.rect(target,self._surface_color("wall",layer["colors"][side]),
+                             (body_x,cy-offset,width,height))
+        self._draw_post_cap(target,cx,top,side)
+
+    def _draw_post_cap(self, target, cx, cy, side):
+        """円形の柱頭を斜めから見た楕円と、その厚みを描く。"""
+        post = self.config["wall_corner_post"]
+        hw,hh = post["cap_width_pixels"]//2,post["cap_depth_pixels"]//2
+        depth = post["cap_height_pixels"]
+        roof = pygame.Rect(cx-hw,cy-hh,2*hw+1,2*hh+1)
+        colors = self.config["wall_layers"][-1]["colors"]
+        side_color = self._surface_color("wall",colors[side])
+        pygame.draw.ellipse(target,side_color,roof.move(0,depth))
+        pygame.draw.rect(target,side_color,(cx-hw,cy,roof.width,depth))
+        pygame.draw.ellipse(target,self._surface_color("wall",colors["top"]),roof)
+
+    def _wall_cap_ends(self, profiles):
+        """接続する壁面が共有する左右の輪郭端を返す。"""
+        self._wall_ends(profiles)
+        return self._wall_cap_end_cache
+
+    def _trim_wall_cap_end(self, points, boundary, keep_right):
+        """壁の縦輪郭から天面だけが飛び出さないように切る。"""
+        clipped = []
+        previous = points[-1]
+        previous_inside = previous[0] >= boundary if keep_right else previous[0] <= boundary
+        for point in points:
+            inside = point[0] >= boundary if keep_right else point[0] <= boundary
+            if inside != previous_inside:
+                t = (boundary-previous[0])/(point[0]-previous[0])
+                clipped.append((boundary,previous[1]+t*(point[1]-previous[1])))
+            if inside:
+                clipped.append(point)
+            previous,previous_inside = point,inside
+        return clipped
+
+    def _draw_wall_face(self, cx, cy, direction, dx, dy, endpoint_heights=(0, 0), exposed_ends=(), support_depths=(0, 0), cap_ends=(), texture_index=0):
         corners = self._diamond(cx, cy)
         edges = {"north": (0, 1), "west": (3, 0), "south": (3, 2), "east": (2, 1)}
         a, b = ((corners[i][0], corners[i][1]-round(z*self.tile_height))
@@ -194,6 +354,11 @@ class DungeonRenderer:
         top_a, top_b = (a[0], a[1] - self.wall_height), (b[0], b[1] - self.wall_height)
         cap_points = [top_a, top_b, (top_b[0] + shift[0], top_b[1] + shift[1]),
                       (top_a[0] + shift[0], top_a[1] + shift[1])]
+        visible_end = 1 if direction in ("north","south") else 0
+        trim_ends = set(cap_ends) | {end for end in exposed_ends if end != visible_end}
+        for end in sorted(trim_ends):
+            endpoint,other = ((a,b)[end],(a,b)[1-end])
+            cap_points = self._trim_wall_cap_end(cap_points,endpoint[0],other[0]>endpoint[0])
         feet = [(p[0],p[1]+round(depth*self.tile_height)) for p,depth in zip((a,b),support_depths)]
         points = [a,b,*cap_points,*feet,
                   *[(x+shift[0],y+shift[1]) for x,y in feet]]
@@ -207,15 +372,16 @@ class DungeonRenderer:
         if any(support_depths):
             pygame.draw.polygon(target,self._surface_color("wall",self.config["wall_layers"][0]["colors"][side]),
                                 local([a,b,feet[1],feet[0]]))
-        for layer in self.config["wall_layers"]:
+        for layer_index,layer in enumerate(self.config["wall_layers"]):
             height = round(layer["height_tiles"] * self.tile_height)
             base = [(a[0], a[1] - offset), (b[0], b[1] - offset)]
             raised = [(px, py - height) for px, py in base]
             pygame.draw.polygon(target, self._surface_color("wall", layer["colors"][side]), local([*base, raised[1], raised[0]]))
+            kind = "wall_lower" if layer_index == 0 else "wall_upper"
+            self._draw_texture(target,kind,texture_index,local([raised[0],raised[1],base[1],base[0]]))
             offset += height
         # 天端と同じ内向きの厚みで、壁の切り口を閉じる。
         end_side = side
-        visible_end = 1 if direction in ("north","south") else 0
         for end in exposed_ends:
             if end != visible_end:
                 continue
@@ -265,23 +431,17 @@ class DungeonRenderer:
         if post["enabled"]:
             all_points += [(px-post["width_pixels"],top[0][1]),
                            (px+post["width_pixels"],ground_y)]
+            all_points += [(px-post["cap_width_pixels"]//2,top[0][1]-post["height_offset_pixels"]-post["cap_depth_pixels"]//2),
+                           (px+post["cap_width_pixels"]//2,ground_y)]
         left,upper = int(min(x for x,y in all_points))-1,int(min(y for x,y in all_points))-1
         right,lower = int(max(x for x,y in all_points))+2,int(max(y for x,y in all_points))+2
         rect = pygame.Rect(left,upper,right-left,lower-upper)
         target = pygame.Surface(rect.size,pygame.SRCALPHA)
         local = lambda points: [(round(x-left),round(y-upper)) for x,y in points]
-        if post["enabled"]:
-            offset = 0
-            for layer in self.config["wall_layers"]:
-                height = round(layer["height_tiles"]*self.tile_height)
-                color = self._surface_color("wall",layer["colors"][post["color_side"]])
-                start,end = local([(px,py-offset),(px,py-offset-height)])
-                pygame.draw.line(target,color,start,end,post["width_pixels"])
-                offset += height
-            color = self._surface_color("wall",self.config["wall_layers"][0]["colors"][post["color_side"]])
-            start,end = local([(px,py),(px,ground_y)])
-            pygame.draw.line(target,color,start,end,post["width_pixels"])
         pygame.draw.polygon(target,self._surface_color("wall",self.config["wall_layers"][-1]["colors"]["top"]),local(top))
+        if post["enabled"]:
+            side = "right" if vertex == 3 else post["color_side"]
+            self._paint_wall_post(target,round(px-left),round(py-upper),elevation,side)
         self._blit_wall_surface(target,rect,first in ("south","east") or second in ("south","east"))
 
     def _draw_actor(self, actor, cx, cy):
@@ -376,10 +536,11 @@ class DungeonRenderer:
                 edges.append(name)
         return tuple(edges)
 
-    def _draw_floor(self, cx, cy, raised, parity, elevation=0, cliff_edges=()):
+    def _draw_floor(self, cx, cy, raised, parity, elevation=0, cliff_edges=(), texture_kind="floor", texture_index=0):
         color = self._floor_color(raised,parity,elevation)
         corners = self._diamond(cx, cy)
         pygame.draw.polygon(self.screen, self._surface_color("floor", color), corners)
+        self._draw_texture(self.screen,texture_kind,texture_index,corners)
         pygame.draw.polygon(self.screen, self.colors["grid"], corners, self.config["grid_line_width"])
         edge_vertices = {"north":(0,1),"west":(3,0),"south":(3,2),"east":(2,1)}
         for name in cliff_edges:
@@ -412,7 +573,9 @@ class DungeonRenderer:
             for a, b, side in ((3, 2, "left"), (2, 1, "right")):
                 pygame.draw.polygon(self.screen, self._surface_color("stair_side", self.colors["platform_side_" + side]),
                                     [top[a], top[b], base[b], base[a]])
+                self._draw_texture(self.screen,"stairs",x+y,[top[a],top[b],base[b],base[a]])
             pygame.draw.polygon(self.screen, self._surface_color("stair_top", self._floor_color(True,(x+y)%2,height)), top)
+            self._draw_texture(self.screen,"stairs",x+y,top)
             pygame.draw.polygon(self.screen, self.colors["grid"], top,
                                 self.config["grid_line_width"])
 
@@ -431,8 +594,10 @@ class DungeonRenderer:
         self.screen.fill(self.colors["background"])
         terrain, actors, items = dungeon.terrain, dungeon.actors, dungeon.items
         elevations, stairs = dungeon.elevations, dungeon.stair_blocks
+        floor_kinds = dungeon.floor_kinds
         wall_profiles = self._wall_profiles(terrain, elevations, stairs)
         wall_ends = self._wall_ends(wall_profiles)
+        wall_cap_ends = self._wall_cap_ends(wall_profiles)
         vertical_extent = self.wall_height + max(max(row) for row in elevations) / 2 * self.tile_height
         # 奥のマスから描くことで、手前の物体が奥の物体に重なる。
         # 画面サイズから余裕を持った探索範囲を求め、画面外を描かない。
@@ -461,7 +626,7 @@ class DungeonRenderer:
                     commands.append((x + y, "stairs", (x, y, stairs[y][x], dungeon)))
                     continue
                 edges = self._cliff_edges(terrain,elevations,stairs,x,y)
-                commands.append((x+y, "floor", (cx,cy,z>0,(x+y)%2,z,edges)))
+                commands.append((x+y, "floor", (cx,cy,z>0,(x+y)%2,z,edges,floor_kinds[y][x],x+y)))
                 for name, dx, dy in (("south", 0, 1), ("east", 1, 0)):
                     nx, ny = x + dx, y + dy
                     neighbor = dungeon.edge_height(nx, ny, -dx, -dy) if dungeon.in_bounds(nx, ny) else 0
@@ -480,7 +645,7 @@ class DungeonRenderer:
                 wx, wy = self.map_to_screen(x, y, dungeon)
                 commands.append((x + y + (dx + dy) / 2, "wall",
                                  (wx, wy, name, dx, dy, wall_profiles[x, y, name],wall_ends[x,y,name],
-                                  wall_profiles[x,y,name])))
+                                  wall_profiles[x,y,name],wall_cap_ends[x,y,name],x+y)))
             for vertex,first,second in self.wall_corners(terrain,x,y):
                 # 各面の共有頂点の標高。階段の斜面でも同じ端点を使う。
                 indices = {"north":(0,1),"west":(3,0),"south":(3,2),"east":(2,1)}
@@ -498,14 +663,21 @@ class DungeonRenderer:
                     position = self.move_animation.position(now_ms) or position
                     z = self.camera_height
                 commands.append((sum(position), "actor", (actor, *self.map_to_screen(*position, dungeon, z))))
+        if self.config["wall_corner_post"]["enabled"]:
+            for x,y,z,depth,fade,left_corner in self._wall_join_posts(wall_profiles):
+                cx,cy = self.map_to_screen(x,y,dungeon,z)
+                if visible.collidepoint((cx,cy)):
+                    commands.append((depth,"wall_join_post",(cx,cy,z,fade,left_corner)))
         player_snapshot = None
         for _, kind, args in sorted(commands, key=lambda command: command[0]):
             if kind == "wall":
                 self._draw_wall_face(*args)
             elif kind == "wall_corner":
                 self._draw_wall_corner(*args)
+            elif kind == "wall_join_post":
+                self._draw_wall_join_post(*args)
             elif kind == "floor":
-                self._draw_floor(*args[:4],elevation=args[4],cliff_edges=args[5])
+                self._draw_floor(*args[:4],elevation=args[4],cliff_edges=args[5],texture_kind=args[6],texture_index=args[7])
                 if args[4] == self.camera_height:
                     self._restore_player_over_floor(player_snapshot, *args[:2],cliff_edges=args[5])
             elif kind == "riser":

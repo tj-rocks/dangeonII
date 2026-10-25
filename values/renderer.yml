@@ -156,6 +156,20 @@ elevation_style:
   edge_color: [0, 0, 0]  # 段差の縁取り色（RGB: 0〜255）
 
 wall_corner_post:
-  enabled: false
-  width_pixels: 3
+  enabled: true
+  width_pixels: 13
+  cap_width_pixels: 17
+  cap_depth_pixels: 8
+  cap_height_pixels: 3
+  height_offset_pixels: 8
   color_side: left
+
+# 通常の正方形/長方形画像を指定。パスはプロジェクトルートから。
+# [] は従来の色描画。1枚なら固定、複数なら (x+y) % 枚数 で循環。
+textures:
+  wall_upper: []  # 例: [assets/textures/wall_upper_a.png, assets/textures/wall_upper_b.png]
+  wall_lower: []
+  floor: []
+  corridor: []
+  stairs: []
+texture_cache_size: 256
