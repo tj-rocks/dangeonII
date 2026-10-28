@@ -47,3 +47,13 @@ def test_returned_arrays_cannot_change_internal_state(dungeon):
     dungeon.actors[0][0] = None
     assert dungeon.terrain[0][0] == Tile.FLOOR
     assert dungeon.player_position == (0, 0)
+
+
+def test_level_stair_is_separate_from_elevation_stair_and_emits_event(dungeon):
+    dungeon.set_level_stair(1, 0, (1, 0), 4)
+    assert dungeon.level_stairs[0][1].visible_treads == 4
+    assert dungeon.stair_blocks[0][1] is None
+    result = dungeon.move_player(1, 0)
+    assert result.moved
+    assert result.reason == "level_stair"
+    assert result.level_stair is dungeon.level_stairs[0][1]

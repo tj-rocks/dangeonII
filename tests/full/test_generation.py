@@ -58,6 +58,19 @@ def test_seed_reproduces_terrain_and_floor_spawns():
                for y, row in enumerate(a.actors) for x, actor in enumerate(row) if actor is not None)
 
 
+def test_generated_level_stair_is_on_a_late_room_and_not_an_elevation_stair():
+    generator = make_generator()
+    dungeon = generator.generate()
+    positions = [(x, y) for y, row in enumerate(dungeon.level_stairs)
+                 for x, stair in enumerate(row) if stair is not None]
+    assert len(positions) == 1
+    x, y = positions[0]
+    last_room = generator.rooms[-1]
+    assert last_room.x <= x < last_room.x + last_room.width
+    assert last_room.y <= y < last_room.y + last_room.height
+    assert dungeon.stair_blocks[y][x] is None
+
+
 def test_impossible_room_count_fails_instead_of_silently_reducing():
     with pytest.raises(ValueError, match='配置できません'):
         make_generator(section_count=10000, max_attempts=20).generate()

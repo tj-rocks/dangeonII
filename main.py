@@ -53,6 +53,8 @@ def main(log_detail: int | None = None, debug_surfaces: bool = False) -> None:
                 if result is not None and result.moved:
                     renderer.move_animation.start(before, dungeon.player_position, now_ms,
                                                   before_height, dungeon.floor_height(*dungeon.player_position))
+                    if result.level_stair is not None:
+                        logger.info1("階層移動階段に到達: %s", dungeon.player_position)
             renderer.draw(dungeon, now_ms)
             pygame.display.flip()
             clock.tick(window["fps"])

@@ -37,6 +37,10 @@ dungeon:
     cliff_sides: [east, south]
     stair_landing_length: 1
     stair_clearance: 2  # 階段・踊り場の周囲へ別の構造を寄せないマス数
+    level_stair:
+      enabled: true
+      direction: south
+      visible_treads: 4
     stair_attempts: 64
     layout_attempts: 32
     seed: null

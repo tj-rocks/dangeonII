@@ -579,6 +579,25 @@ class DungeonRenderer:
             pygame.draw.polygon(self.screen, self.colors["grid"], top,
                                 self.config["grid_line_width"])
 
+    def _draw_level_stair(self, cx, cy, stair):
+        """床下へ続く暗い開口部と、見えている踏み段を描く。"""
+        setting = self.config["level_stairs"]
+        width = self.tile_width * setting["opening_scale"]
+        height = self.tile_height * setting["opening_scale"]
+        opening = [(cx, cy - height / 2), (cx + width / 2, cy),
+                   (cx, cy + height / 2), (cx - width / 2, cy)]
+        pygame.draw.polygon(self.screen, setting["opening_color"], opening)
+        count = min(stair.visible_treads, setting["max_visible_treads"])
+        for index in range(count, 0, -1):
+            inset = index / (count + 1)
+            left = cx - width * inset / 2
+            right = cx + width * inset / 2
+            middle = cy
+            pygame.draw.line(self.screen, setting["tread_color"],
+                             (left, middle), (right, middle), setting["tread_width"])
+        pygame.draw.polygon(self.screen, setting["opening_border_color"], opening,
+                            setting["opening_border_width"])
+
     def _draw_riser(self, cx, cy, direction, drop_pixels):
         corners = self._diamond(cx, cy)
         a, b = (corners[i] for i in ((3, 2) if direction == "south" else (2, 1)))
@@ -627,6 +646,9 @@ class DungeonRenderer:
                     continue
                 edges = self._cliff_edges(terrain,elevations,stairs,x,y)
                 commands.append((x+y, "floor", (cx,cy,z>0,(x+y)%2,z,edges,floor_kinds[y][x],x+y)))
+                level_stair = dungeon.level_stairs[y][x]
+                if level_stair is not None:
+                    commands.append((x + y + 0.1, "level_stair", (cx, cy, level_stair)))
                 for name, dx, dy in (("south", 0, 1), ("east", 1, 0)):
                     nx, ny = x + dx, y + dy
                     neighbor = dungeon.edge_height(nx, ny, -dx, -dy) if dungeon.in_bounds(nx, ny) else 0
@@ -684,6 +706,8 @@ class DungeonRenderer:
                 self._draw_riser(*args)
             elif kind == "stairs":
                 self._draw_stair_block(*args)
+            elif kind == "level_stair":
+                self._draw_level_stair(*args)
             elif kind == "item":
                 cx, cy = args
                 pygame.draw.polygon(self.screen, self.colors["item"],

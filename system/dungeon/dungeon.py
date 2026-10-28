@@ -34,6 +34,8 @@ class MoveResult:
     reason: str
     # アイテム到達イベント。呼び出し側で回復・効果音・表示などを処理する。
     item: Item | None = None
+    # 階層移動階段へ到達したイベント。実際の階層切り替えはmain側で行う。
+    level_stair: "LevelStair | None" = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,13 @@ class StairBlock:
     """1マスの高さを接続する専用ブロック。床の半段とは別の地形情報。"""
     base_height: int
     up_direction: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class LevelStair:
+    """階層移動用の下り階段。標高用のStairBlockとは別の地形情報。"""
+    direction: tuple[int, int]
+    visible_treads: int
 
 
 @trace_class(info_methods=("__init__", "set_tile", "place", "move_player", "move_actor"))
@@ -68,6 +77,7 @@ class Dungeon:
         self._floor_kinds = [["floor" for _ in range(width)] for _ in range(height)]
         self._elevations = [[0 for _ in range(width)] for _ in range(height)]
         self._stair_blocks: list[list[StairBlock | None]] = [[None for _ in range(width)] for _ in range(height)]
+        self._level_stairs: list[list[LevelStair | None]] = [[None for _ in range(width)] for _ in range(height)]
 
     @property
     def width(self) -> int:
@@ -112,6 +122,10 @@ class Dungeon:
     def stair_blocks(self) -> list[list[StairBlock | None]]:
         return [row[:] for row in self._stair_blocks]
 
+    @property
+    def level_stairs(self) -> list[list[LevelStair | None]]:
+        return [row[:] for row in self._level_stairs]
+
     def floor_height(self, x: int, y: int) -> float:
         self._check_bounds(x, y)
         return self._elevations[y][x] / 2
@@ -131,6 +145,21 @@ class Dungeon:
             raise ValueError("階段の下端は0以上の整数標高、上り方向は上下左右で指定してください")
         self.set_elevation(x, y, base_height * 2 + 1)
         self._stair_blocks[y][x] = StairBlock(base_height, up_direction)
+
+    def set_level_stair(self, x: int, y: int, direction: tuple[int, int], visible_treads: int) -> None:
+        """階層移動階段の開口部を床へ設定する。"""
+        if direction not in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            raise ValueError("階層階段の方向は上下左右で指定してください")
+        if type(visible_treads) is not int or visible_treads <= 0:
+            raise ValueError("階層階段の踏み段数は正の整数にしてください")
+        self._check_bounds(x, y)
+        if self._terrain[y][x] != Tile.FLOOR:
+            raise ValueError("階層階段は床に設定してください")
+        if self._stair_blocks[y][x] is not None:
+            raise ValueError("標高用階段と階層階段は同じマスに置けません")
+        if self._actors[y][x] is not None or self._items[y][x] is not None:
+            raise ValueError("配置物のあるマスには階層階段を置けません")
+        self._level_stairs[y][x] = LevelStair(direction, visible_treads)
 
     def edge_height(self, x: int, y: int, dx: int, dy: int) -> float | None:
         """マスの出入口の標高。階段の横面には出入口がない。"""
@@ -257,7 +286,8 @@ class Dungeon:
         if isinstance(actor, Player):
             item = self._items[ny][nx]
             self._items[ny][nx] = None
-        return MoveResult(True, "moved", item)
+        level_stair = self._level_stairs[ny][nx] if isinstance(actor, Player) else None
+        return MoveResult(True, "level_stair" if level_stair is not None else "moved", item, level_stair)
 
 
 @dataclass(frozen=True)
@@ -309,7 +339,7 @@ class DungeonGenerator:
                  section_sizes: list[list[int]], section_elevations: list[int],
                  adjacent_probability: float, corridor_elevation: int,
                  wall_thickness: int, corridor_width: int, max_attempts: int,
-                 stair_attempts: int, seed: int | None, layout_attempts: int, stair_sides: list[str], stair_landing_length: int, cliff_sides: list[str], stair_clearance: int):
+                 stair_attempts: int, seed: int | None, layout_attempts: int, stair_sides: list[str], stair_landing_length: int, cliff_sides: list[str], stair_clearance: int, level_stair: dict):
         if any(type(v) is not int or v <= 0 for v in
                (width, height, section_count, wall_thickness, corridor_width, max_attempts, stair_attempts, layout_attempts, stair_landing_length, stair_clearance)):
             raise ValueError("広さ・区画数・壁厚・通路幅・試行回数は正の整数にしてください")
@@ -335,6 +365,15 @@ class DungeonGenerator:
         if (not isinstance(cliff_sides,list) or not cliff_sides
                 or any(not isinstance(side,str) or side not in directions for side in cliff_sides)):
             raise ValueError("cliff_sidesはnorth・west・south・eastから指定してください")
+        if (not isinstance(level_stair, dict)
+                or type(level_stair.get("enabled")) is not bool
+                or type(level_stair.get("visible_treads")) is not int
+                or level_stair["visible_treads"] <= 0):
+            raise ValueError("level_stairはenabledと正のvisible_treadsを指定してください")
+        level_directions = {"north": (0, -1), "west": (-1, 0), "south": (0, 1), "east": (1, 0)}
+        direction_name = level_stair.get("direction")
+        if direction_name not in level_directions:
+            raise ValueError("level_stair.directionはnorth・west・south・eastから指定してください")
         self.cliff_sides = frozenset(cliff_sides)
         self.stair_directions = tuple(directions[side] for side in stair_sides)
         self.width, self.height = width, height
@@ -345,6 +384,9 @@ class DungeonGenerator:
         self.max_attempts, self.stair_attempts, self.seed = max_attempts, stair_attempts, seed
         self.stair_landing_length = stair_landing_length
         self.stair_clearance = stair_clearance
+        self.level_stair_enabled = level_stair["enabled"]
+        self.level_stair_visible_treads = level_stair["visible_treads"]
+        self.level_stair_direction = level_directions[direction_name]
         self._corridor_stair_area = None
         self.entrance_plans: tuple[EntrancePlan, ...] = ()
         self.layout_attempts = layout_attempts
@@ -429,6 +471,8 @@ class DungeonGenerator:
                 for x in range(room.x, room.x + room.width):
                     dungeon.set_elevation(x, y, room.elevation * 2)
         self._connect_elevations(dungeon)
+        if self.level_stair_enabled:
+            self._place_level_stair(dungeon)
         room_cells = {(x,y) for room in rooms for y in range(room.y,room.y+room.height)
                       for x in range(room.x,room.x+room.width)}
         for y,row in enumerate(dungeon.terrain):
@@ -436,6 +480,19 @@ class DungeonGenerator:
                 if tile == Tile.FLOOR:
                     dungeon.set_floor_kind(x,y,"floor" if (x,y) in room_cells else "corridor")
         return dungeon
+
+    def _place_level_stair(self, dungeon: Dungeon) -> None:
+        """最後に採用した部屋の中央付近へ階層移動階段を1つ置く。"""
+        room = self.rooms[-1]
+        candidates = [
+            (x, y) for y in range(room.y, room.y + room.height)
+            for x in range(room.x, room.x + room.width)
+            if dungeon.stair_blocks[y][x] is None
+        ]
+        if not candidates:
+            raise StairPlacementError("階層移動階段を置ける床がありません")
+        x, y = min(candidates, key=lambda point: abs(point[0] - room.center[0]) + abs(point[1] - room.center[1]))
+        dungeon.set_level_stair(x, y, self.level_stair_direction, self.level_stair_visible_treads)
 
     def _room_cliff_allowed(self, first: Room, second: Room) -> bool:
         """高さの違う部屋が接するとき、高い床の見える側か調べる。"""
@@ -771,7 +828,8 @@ class DungeonGenerator:
         terrain = dungeon.terrain
         candidates = [(x, y) for y, row in enumerate(terrain)
                       for x, tile in enumerate(row) if tile == Tile.FLOOR and (x, y) != start
-                      and dungeon._stair_blocks[y][x] is None]
+                      and dungeon._stair_blocks[y][x] is None
+                      and dungeon._level_stairs[y][x] is None]
         if len(candidates) < len(item_names) + len(enemy_names):
             raise ValueError("配置する敵・アイテムに対して床が足りません")
         self.random.shuffle(candidates)

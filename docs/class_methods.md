@@ -53,7 +53,7 @@ flowchart TD
 |---|---|---|
 | `main(log_detail)` | 設定・ログ・Pygameを初期化。地形生成、初期配置、入力、移動開始、描画、FPS制御、終了を接続する | `None` |
 
-`log_detail=None`ならYAMLの設定値を使用します。ダンジョン生成・初期配置が成功した後、`SaveData.enter_dungeon()`で現在地フラグを保存します。移動アニメーション中もキー解放・終了は処理し、次のマスへの移動は到着後に開始します。
+`log_detail=None`ならYAMLの設定値を使用します。ダンジョン生成・初期配置が成功した後、`SaveData.enter_dungeon()`で現在地フラグを保存します。移動アニメーション中もキー解放・終了は処理し、次のマスへの移動は到着後に開始します。階層移動階段へ到達した場合は`MoveResult.level_stair`を検知してログへ記録します。実際の次階層生成・切り替えは未実装です。
 
 ## system/dungeon/dungeon.py
 
@@ -65,8 +65,9 @@ flowchart TD
 | `Player` | プレイヤーの名前。座標は持たない |
 | `Enemy` | 敵の名前。座標は持たない |
 | `Item` | アイテムの名前。座標は持たない |
-| `MoveResult` | 移動結果。`moved`（成否）、`reason`（理由）、`item`（取得物または`None`） |
+| `MoveResult` | 移動結果。`moved`（成否）、`reason`（理由）、`item`（取得物または`None`）、`level_stair`（到達した階層階段または`None`） |
 | `StairBlock` | 専用の階段ブロック。下端標高`base_height`と上り方向`up_direction`を持ち、上端は下端＋1マス |
+| `LevelStair` | 階層移動用の下り階段。開口部から上階側への`direction`と表示踏み段数を持つ。標高用階段とは別管理 |
 
 ### Dungeon：ゲーム状態と移動ルール
 
@@ -80,9 +81,11 @@ flowchart TD
 | `elevations` | 各床・階段中央の高さを0.5マス単位の整数で読む。配列はコピー | 2次元配列 |
 | `stair_axes` | 階段ブロックから軸を導出する。`x`・`y`・階段でない場所は`None` | 2次元配列 |
 | `stair_blocks` | 各マスの専用階段ブロックを読む。空きは`None`、配列はコピー | 2次元配列 |
+| `level_stairs` | 階層移動階段の開口部を読む。空きは`None`、配列はコピー | 2次元配列 |
 | `floor_height(x, y)` | 指定マスの高さを通常のマス単位へ変換する | `float` |
 | `set_elevation(x, y, half_steps)` | 配置物のない床に高さを設定する。階段情報は解除する | `None` |
 | `set_stair_block(x, y, base_height, up_direction)` | 床に専用階段を設定し、中央の標高も記録する | `None` |
+| `set_level_stair(x, y, direction, visible_treads)` | 床に階層移動階段の開口部を設定する。標高用階段・配置物との重複を拒否する | `None` |
 | `edge_height(x, y, dx, dy)` | 指定方向の出入口標高を調べる。階段の横面には出入口がない | `float`または`None` |
 | `surface_height(x, y)` | 小数の描画位置から標高を計算する。階段の中は下端から上端へ連続変化 | `float` |
 | `can_step(x, y, nx, ny)` | 地形・段差・階段の向きから1マス移動可能か調べる。キャラクター占有は考慮しない | `bool` |
@@ -193,6 +196,7 @@ seedを固定すると区画・標高・階段・初期配置を再現できま�
 | `_draw_actor(actor, cx, cy)` | プレイヤー・敵の仮の図形、影、識別文字を描く | `None` |
 | `_draw_floor(cx, cy, raised, parity, elevation=0, cliff_edges=())` | 地上・段床の上面を色分けして描く | `None` |
 | `_draw_stair_block(x, y, block, dungeon)` | 1マス高の専用階段を複数の踏み段と側面で描く。段数はYAMLで指定 | `None` |
+| `_draw_level_stair(cx, cy, stair)` | 床下へ続く階層移動階段の暗い開口部と踏み段を描く。設定は`level_stairs`から読む | `None` |
 | `_draw_riser(cx, cy, direction, drop_pixels)` | 高い床から低い床へ落ちる南・東の側面を描く | `None` |
 | `draw(dungeon, now_ms)` | カメラとマスクを更新。表示範囲の床・壁の下地を描き、壁面・アイテム・キャラを奥行き順に描画し、操作案内を表示 | `None` |
 
