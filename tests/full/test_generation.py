@@ -3,7 +3,7 @@ from collections import deque
 import pytest
 
 from system.configuration import load_settings
-from system.dungeon import DungeonGenerator, Tile
+from system.dungeon import DescentDungeonGenerator, DungeonGenerator, Tile
 
 
 def make_generator(seed=42, **overrides):
@@ -11,6 +11,50 @@ def make_generator(seed=42, **overrides):
     settings = dict(world['generation'], seed=seed)
     settings.update(overrides)
     return DungeonGenerator(world['width'], world['height'], **settings)
+
+
+@pytest.mark.parametrize('direction', ['east', 'south', 'corner'])
+@pytest.mark.parametrize('size, requested_elevation, expected_elevation',
+                         [(0, -5, 8), (20, 8, 8), (20, 20, 8),
+                          (100, 20, 20), (120, 30, 20)])
+def test_descent_generator_scales_and_connects_elevation_bands(
+        direction, size, requested_elevation, expected_elevation):
+    world = load_settings('setting.yml')['dungeon']
+    settings = dict(world['descent_generation'], directions=[direction], seed=42,
+                    start_elevation=requested_elevation)
+    generator = DescentDungeonGenerator(size, size, **settings)
+    dungeon = generator.generate()
+    floors = {(x, y) for y, row in enumerate(dungeon.terrain)
+              for x, tile in enumerate(row) if tile == Tile.FLOOR}
+    expected_size = max(20, min(size, 100))
+    assert (dungeon.width, dungeon.height) == (expected_size, expected_size)
+    assert generator.sector_count == expected_elevation // 2
+    assert len(generator.rooms) >= generator.sector_count ** 2
+    degrees = {(column, row): 0 for row in range(generator.sector_count)
+               for column in range(generator.sector_count)}
+    for first, second in generator.connections:
+        degrees[first] += 1
+        degrees[second] += 1
+    assert len(generator.connections) == generator.sector_count ** 2 - 1
+    assert sum(degree >= 3 for degree in degrees.values()) >= settings['minimum_branches']
+    assert dungeon.reachable_from(generator.start) == floors
+    assert dungeon.floor_height(*generator.start) == expected_elevation
+    assert dungeon.floor_height(*generator.exit) == 2
+    assert {room.elevation for room in generator.rooms} == set(range(2, expected_elevation + 1, 2))
+    assert dungeon.level_stairs[generator.exit[1]][generator.exit[0]] is not None
+    generator.populate(dungeon, 'Player', ['薬'], ['敵'])
+    assert dungeon.player_position == generator.start
+
+
+def test_descent_rooms_include_small_and_nearly_full_sector_sizes():
+    world = load_settings('setting.yml')['dungeon']
+    generator = DescentDungeonGenerator(
+        100, 100, **(world['descent_generation'] | {'seed': 42}))
+    generator.generate()
+    sizes = {(room.width, room.height) for room in generator.rooms}
+    assert len(sizes) > 4
+    assert (3, 3) in sizes
+    assert (8, 8) in sizes  # 10×10区画の外周1マスを残した全面型
 
 
 @pytest.mark.parametrize('seed', [0, 1, 42, 100, 999])
@@ -56,6 +100,19 @@ def test_seed_reproduces_terrain_and_floor_spawns():
     assert [[type(v) for v in row] for row in a.items] == [[type(v) for v in row] for row in b.items]
     assert all(a.terrain[y][x] == Tile.FLOOR
                for y, row in enumerate(a.actors) for x, actor in enumerate(row) if actor is not None)
+
+
+def test_generated_level_stair_is_on_a_late_room_and_not_an_elevation_stair():
+    generator = make_generator()
+    dungeon = generator.generate()
+    positions = [(x, y) for y, row in enumerate(dungeon.level_stairs)
+                 for x, stair in enumerate(row) if stair is not None]
+    assert len(positions) == 1
+    x, y = positions[0]
+    last_room = generator.rooms[-1]
+    assert last_room.x <= x < last_room.x + last_room.width
+    assert last_room.y <= y < last_room.y + last_room.height
+    assert dungeon.stair_blocks[y][x] is None
 
 
 def test_impossible_room_count_fails_instead_of_silently_reducing():

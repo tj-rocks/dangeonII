@@ -134,6 +134,15 @@ wall_cap_width_tiles: 0.12
 stairs:
   treads_per_block: 2
 
+level_stairs:
+  opening_scale: 0.82
+  max_visible_treads: 5
+  opening_color: [18, 16, 24]
+  tread_color: [78, 82, 96]
+  tread_width: 2
+  opening_border_color: [116, 124, 142]
+  opening_border_width: 2
+
 player_occlusion:
   enabled: true
   alpha: 180

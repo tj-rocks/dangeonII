@@ -53,7 +53,7 @@ flowchart TD
 |---|---|---|
 | `main(log_detail)` | 設定・ログ・Pygameを初期化。地形生成、初期配置、入力、移動開始、描画、FPS制御、終了を接続する | `None` |
 
-`log_detail=None`ならYAMLの設定値を使用します。ダンジョン生成・初期配置が成功した後、`SaveData.enter_dungeon()`で現在地フラグを保存します。移動アニメーション中もキー解放・終了は処理し、次のマスへの移動は到着後に開始します。
+`log_detail=None`ならYAMLの設定値を使用します。`generation_mode`が`classic`なら従来の`DungeonGenerator`、`descent`なら`DescentDungeonGenerator`、`mixed`なら起動時に2方式から抽選します。生成・初期配置が成功した後、`SaveData.enter_dungeon()`で現在地フラグを保存します。移動アニメーション中もキー解放・終了は処理し、次のマスへの移動は到着後に開始します。階層移動階段へ到達した場合は`MoveResult.level_stair`を検知してログへ記録します。実際の次階層生成・切り替えは未実装です。
 
 ## system/dungeon/dungeon.py
 
@@ -65,8 +65,9 @@ flowchart TD
 | `Player` | プレイヤーの名前。座標は持たない |
 | `Enemy` | 敵の名前。座標は持たない |
 | `Item` | アイテムの名前。座標は持たない |
-| `MoveResult` | 移動結果。`moved`（成否）、`reason`（理由）、`item`（取得物または`None`） |
+| `MoveResult` | 移動結果。`moved`（成否）、`reason`（理由）、`item`（取得物または`None`）、`level_stair`（到達した階層階段または`None`） |
 | `StairBlock` | 専用の階段ブロック。下端標高`base_height`と上り方向`up_direction`を持ち、上端は下端＋1マス |
+| `LevelStair` | 階層移動用の下り階段。開口部から上階側への`direction`と表示踏み段数を持つ。標高用階段とは別管理 |
 
 ### Dungeon：ゲーム状態と移動ルール
 
@@ -80,9 +81,11 @@ flowchart TD
 | `elevations` | 各床・階段中央の高さを0.5マス単位の整数で読む。配列はコピー | 2次元配列 |
 | `stair_axes` | 階段ブロックから軸を導出する。`x`・`y`・階段でない場所は`None` | 2次元配列 |
 | `stair_blocks` | 各マスの専用階段ブロックを読む。空きは`None`、配列はコピー | 2次元配列 |
+| `level_stairs` | 階層移動階段の開口部を読む。空きは`None`、配列はコピー | 2次元配列 |
 | `floor_height(x, y)` | 指定マスの高さを通常のマス単位へ変換する | `float` |
 | `set_elevation(x, y, half_steps)` | 配置物のない床に高さを設定する。階段情報は解除する | `None` |
 | `set_stair_block(x, y, base_height, up_direction)` | 床に専用階段を設定し、中央の標高も記録する | `None` |
+| `set_level_stair(x, y, direction, visible_treads)` | 床に階層移動階段の開口部を設定する。標高用階段・配置物との重複を拒否する | `None` |
 | `edge_height(x, y, dx, dy)` | 指定方向の出入口標高を調べる。階段の横面には出入口がない | `float`または`None` |
 | `surface_height(x, y)` | 小数の描画位置から標高を計算する。階段の中は下端から上端へ連続変化 | `float` |
 | `can_step(x, y, nx, ny)` | 地形・段差・階段の向きから1マス移動可能か調べる。キャラクター占有は考慮しない | `bool` |
@@ -141,6 +144,21 @@ flowchart TD
 `StairPlacementError`は区画配置・階段用の空間不足・接続不成立を表す`ValueError`の派生クラスです。
 seedを固定すると区画・標高・階段・初期配置を再現できます。
 
+### DescentDungeonGenerator：区画を下っていく別の生成方式
+
+`descent_generation`の設定を使います。希望マップサイズを`limits`の20〜100へ補正し、標高も8〜20かつ1区画5マス以上に収まる偶数へ補正します。標高差2なら20×20は4×4区画で標高8→6→4→2、100×100は10×10区画で20→18→…→2です。部屋の幅・高さは`room_coverage`からそれぞれ独立に選ぶ割合で変えます。1.0なら区画外周1マスを除くほぼ全面を部屋にし、広い区画には重ならない場合のみ小部屋も置きます。5〜7マスの狭い区画は幅1通路と小部屋・接続点にします。区画間は到達済み区画の境界からランダムに伸ばす全域木でつなぎ、`minimum_branches`個以上の3方向以上の分岐を保証します。標高境界の低い側に差分と同じ数の`StairBlock`を連ねます。高い床が北・西、低い床が東・南になるため、段差は見える側に限られます。同じXYに床を重ねず、既存の`Dungeon`と`DungeonRenderer`を使います。次階層への階段は最も低い標高の主部屋に置きます。
+
+| メソッド | 役割 | 戻り値 |
+|---|---|---|
+| `__init__(...)` | YAMLの希望マップサイズと標高を上限・下限・区画最小幅で補正し、区画境界・実際の通路幅を計算する。部屋の幅・高さの割合候補、進行方向、最低分岐数、再試行数、階層階段、seedも検証する | `None` |
+| `_sector_elevation(column, row)` | 選ばれた進行方向と区画座標から標高を計算する | 整数 |
+| `_sector_edges(count)` | 到達済み区画の境界からランダムに伸ばし、枝分かれする全域木の候補を作る | 区画ペアのリスト |
+| `_carve_segment(dungeon, start, end)` | 2つの部屋の中心間を通路幅で掘る | `None` |
+| `generate()` | 最低分岐数を満たす接続木を`branch_attempts`回まで試し、区画サイズに応じた部屋・通路・標高・階段を生成して全床の到達性を確認する。確定した区画間の辺は`connections`に保持する | `Dungeon` |
+| `populate(dungeon, player_name, item_names, enemy_names)` | 最高標高の開始部屋に主人公を置き、敵・アイテムを階段外へ配置する | `None` |
+
+`directions`は`east`（左から右）、`south`（奥から手前）、`corner`（左奥から右手前）から抽選します。`corner`では区画の行番号と列番号の和を最後の標高帯で止めます。`generation_mode: mixed`は、従来方式と下降方式の両方を起動ごとに使います。下降方式の`seed`を固定すると部屋・通路・階段を再現できます。希望値と採用値は`main`でログに記録します。
+
 ## system/operate.py
 
 ### OperateSettings：操作設定
@@ -193,6 +211,7 @@ seedを固定すると区画・標高・階段・初期配置を再現できま�
 | `_draw_actor(actor, cx, cy)` | プレイヤー・敵の仮の図形、影、識別文字を描く | `None` |
 | `_draw_floor(cx, cy, raised, parity, elevation=0, cliff_edges=())` | 地上・段床の上面を色分けして描く | `None` |
 | `_draw_stair_block(x, y, block, dungeon)` | 1マス高の専用階段を複数の踏み段と側面で描く。段数はYAMLで指定 | `None` |
+| `_draw_level_stair(cx, cy, stair)` | 床下へ続く階層移動階段の暗い開口部と踏み段を描く。設定は`level_stairs`から読む | `None` |
 | `_draw_riser(cx, cy, direction, drop_pixels)` | 高い床から低い床へ落ちる南・東の側面を描く | `None` |
 | `draw(dungeon, now_ms)` | カメラとマスクを更新。表示範囲の床・壁の下地を描き、壁面・アイテム・キャラを奥行き順に描画し、操作案内を表示 | `None` |
 
