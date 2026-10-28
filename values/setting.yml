@@ -8,6 +8,7 @@ logging:
 dungeon:
   width: 100
   height: 100
+  generation_mode: descent  # classic / descent / mixed
   player:
     name: Player
   items:
@@ -43,4 +44,24 @@ dungeon:
       visible_treads: 4
     stair_attempts: 64
     layout_attempts: 32
+    seed: null
+  descent_generation:
+    start_elevation: 20
+    elevation_step: 2
+    min_sector_size: 5
+    limits:
+      min_map_size: 20
+      max_map_size: 100
+      min_elevation: 8
+      max_elevation: 20
+    room_coverage: [0.35, 0.55, 0.75, 1.0]  # 1.0は区画内の壁1マスを除く全面
+    corridor_width: 3
+    wall_thickness: 2
+    directions: [east, south, corner]
+    minimum_branches: 2
+    branch_attempts: 32
+    level_stair:
+      enabled: true
+      direction: south
+      visible_treads: 4
     seed: null

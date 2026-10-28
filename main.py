@@ -1,9 +1,10 @@
 """実行: python main.py。ウィンドウを選択して矢印キーで操作。"""
 
 import argparse
+from random import Random
 import pygame
 
-from system.dungeon import DungeonGenerator
+from system.dungeon import DescentDungeonGenerator, DungeonGenerator
 from system.operate import Operate
 from system.renderer import DungeonRenderer
 from system.logs.tracing import begin_trace_frame, configure_logging, logger
@@ -22,7 +23,20 @@ def main(log_detail: int | None = None, debug_surfaces: bool = False) -> None:
         clock = pygame.time.Clock()
 
         world = settings["dungeon"]
-        generator = DungeonGenerator(world["width"], world["height"], **world["generation"])
+        mode = world["generation_mode"]
+        if mode not in ("classic", "descent", "mixed"):
+            raise ValueError("generation_modeはclassic・descent・mixedから指定してください")
+        if mode == "mixed":
+            mode = Random(world["generation"]["seed"]).choice(("classic", "descent"))
+        generator = (DungeonGenerator(world["width"], world["height"], **world["generation"])
+                     if mode == "classic" else
+                     DescentDungeonGenerator(world["width"], world["height"], **world["descent_generation"]))
+        logger.info1("ダンジョン生成方式: %s", mode)
+        if isinstance(generator, DescentDungeonGenerator):
+            logger.info1("下降マップ: 希望 %sx%s 標高%s → 採用 %sx%s 標高%s",
+                         generator.requested_width, generator.requested_height,
+                         generator.requested_elevation, generator.width,
+                         generator.height, generator.start_elevation)
         dungeon = generator.generate()
         generator.populate(dungeon, world["player"]["name"],
                            [item["name"] for item in world["items"]],
